@@ -148,6 +148,7 @@ def init_db():
         pren_cols = {row[1] for row in conn.execute("PRAGMA table_info(prenotazioni)")}
         if "staff_id" not in pren_cols:
             conn.execute("ALTER TABLE prenotazioni ADD COLUMN staff_id INTEGER")
+        conn.execute("UPDATE prenotazioni SET stato = 'confermato' WHERE stato = 'confermata'")
         if not conn.execute("SELECT id FROM impostazioni LIMIT 1").fetchone():
             conn.execute("INSERT INTO impostazioni (nome_attivita) VALUES (?)", ("La Mia Attività",))
 
@@ -264,12 +265,12 @@ def _seed_prodotto(conn):
     def giorno(delta):
         return (oggi + timedelta(days=delta)).strftime("%Y-%m-%d")
     esempi = [
-        ("Giulia", "Bianchi", "333 111 2233", "giulia.bianchi@email.it", taglio, giorno(0), "10:00", "", "confermata"),
+        ("Giulia", "Bianchi", "333 111 2233", "giulia.bianchi@email.it", taglio, giorno(0), "10:00", "", "pagato"),
         ("Marco", "Rossi", "333 222 3344", "marco.rossi@email.it", piega, giorno(0), "11:00", "Capelli lunghi", "in_attesa"),
-        ("Elena", "Conti", "333 333 4455", "", colore, giorno(0), "15:00", "", "confermata"),
-        ("Luca", "Ferrari", "333 444 5566", "luca.ferrari@email.it", taglio, giorno(1), "09:30", "", "confermata"),
+        ("Elena", "Conti", "333 333 4455", "", colore, giorno(0), "15:00", "", "confermato"),
+        ("Luca", "Ferrari", "333 444 5566", "luca.ferrari@email.it", taglio, giorno(1), "09:30", "", "confermato"),
         ("Sara", "De Luca", "333 555 6677", "", tratt, giorno(1), "16:00", "Prima volta", "in_attesa"),
-        ("Anna", "Greco", "333 666 7788", "anna.greco@email.it", piega, giorno(2), "10:30", "", "confermata"),
+        ("Anna", "Greco", "333 666 7788", "anna.greco@email.it", piega, giorno(2), "10:30", "", "pagato"),
     ]
     for riga in esempi:
         if not riga[4]:
@@ -584,7 +585,7 @@ def get_statistiche():
                FROM prenotazioni p
                LEFT JOIN servizi s ON p.servizio_id = s.id
                WHERE strftime('%Y-%m', p.data_prenotazione) = ?
-                 AND p.stato = 'confermata'""",
+                 AND p.stato = 'pagato'""",
             (mese,),
         ).fetchone()
         ricavi = ricavi_row["totale"] if ricavi_row and ricavi_row["totale"] else 0

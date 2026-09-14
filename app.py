@@ -175,22 +175,32 @@ section[data-testid="stSidebar"] .stRadio > label {{ display: none; }}
 .header h1 {{ font-size: 2rem; margin: 0; color: #fff; }}
 .header p {{ margin: 0.4rem 0 0; opacity: 0.95; font-size: 1rem; color: #fff; }}
 .metric-card {{
-    background: white; padding: 1.5rem; border-radius: 16px;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.08); text-align: center;
-    border-top: 4px solid {primario}; animation: fadeInUp 0.5s ease-out both;
+    background: white; padding: 1.15rem 0.7rem 1.05rem;
+    border-radius: 16px; box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+    text-align: center; border-top: 4px solid {primario};
+    animation: fadeInUp 0.5s ease-out both;
+    min-height: 148px; height: 100%;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
 }}
-.metric-value {{ font-size: 2.2rem; font-weight: 700; color: {primario}; }}
-.metric-label {{ color: #888; font-size: 0.85rem; margin-top: 0.3rem; }}
+.metric-icon {{ font-size: 1.35rem; color: {primario}; margin-bottom: 0.4rem; line-height: 1; }}
+.metric-value {{
+    font-size: 1.7rem; font-weight: 700; color: {primario};
+    line-height: 1.15; white-space: nowrap; letter-spacing: -0.02em;
+}}
+.metric-label {{ color: #888; font-size: 0.78rem; margin-top: 0.35rem; line-height: 1.25; }}
+[data-testid="stHeaderActionElements"] {{ display: none !important; }}
 .card, .booking-item, .service-pick, .recap-box {{
     background: white; border-radius: 12px; padding: 1.2rem 1.4rem;
     margin-bottom: 0.6rem; box-shadow: 0 4px 16px rgba(0,0,0,0.08);
 }}
 .booking-item {{ border-left: 4px solid {secondario}; animation: slideInLeft 0.35s ease-out both; }}
-.booking-item.confermata {{ border-left-color: #27ae60; }}
+.booking-item.confermato, .booking-item.confermata {{ border-left-color: #27ae60; }}
+.booking-item.pagato {{ border-left-color: #1a7f9e; }}
 .booking-item.in_attesa {{ border-left-color: #f39c12; }}
 .booking-item.annullata {{ border-left-color: #95a5a6; opacity: 0.7; }}
 .status-badge {{ display: inline-block; padding: 0.25rem 0.75rem; border-radius: 20px; font-size: 0.8rem; font-weight: 600; }}
-.status-confermata {{ background: #d4edda; color: #155724; }}
+.status-confermato, .status-confermata {{ background: #d4edda; color: #155724; }}
+.status-pagato {{ background: #d6eef6; color: #0c5460; }}
 .status-in_attesa {{ background: #fff3cd; color: #856404; }}
 .status-annullata {{ background: #e2e3e5; color: #383d41; }}
 .section-title {{
@@ -333,19 +343,24 @@ def pagina_home():
     render_header("Il tuo salone, oggi")
     st.markdown('<h2 class="section-title"><i class="fas fa-chart-line"></i> Panoramica</h2>', unsafe_allow_html=True)
     stat = get_statistiche()
+    ricavi = float(stat["ricavi_mese"] or 0)
+    ricavi_txt = f"€{ricavi:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     cards = [
         (stat["totale_prenotazioni"], "Prenotazioni attive", "fa-calendar-check"),
         (stat["prenotazioni_oggi"], "Appuntamenti oggi", "fa-circle-check"),
         (stat["prenotazioni_mese"], "Questo mese", "fa-calendar-week"),
-        (f"€{stat['ricavi_mese']:.2f}", "Ricavi confermati", "fa-coins"),
+        (ricavi_txt, "Ricavi incassati", "fa-coins"),
     ]
-    cols = st.columns(4)
+    cols = st.columns(4, gap="small")
     for col, (val, label, icon) in zip(cols, cards):
-        col.markdown(
-            f'<div class="metric-card"><div class="metric-value"><i class="fas {icon}"></i> {esc(val)}</div>'
-            f'<div class="metric-label">{label}</div></div>',
-            unsafe_allow_html=True,
-        )
+        with col:
+            html_md(
+                f'<div class="metric-card">'
+                f'<div class="metric-icon"><i class="fas {icon}"></i></div>'
+                f'<div class="metric-value">{esc(val)}</div>'
+                f'<div class="metric-label">{esc(label)}</div>'
+                f"</div>"
+            )
     st.markdown("---")
     today = datetime.now().strftime("%Y-%m-%d")
     prenotazioni_oggi = [p for p in get_prenotazioni(data=today) if p["stato"] != "annullata"]
@@ -361,9 +376,13 @@ def pagina_home():
 
 
 def _booking_card(p, truncate_note=True):
-    status_label = {"confermata": "Confermata", "in_attesa": "In attesa", "annullata": "Annullata"}.get(
-        p["stato"], p["stato"]
-    )
+    status_label = {
+        "in_attesa": "In attesa",
+        "confermato": "Confermato",
+        "confermata": "Confermato",
+        "pagato": "Pagato",
+        "annullata": "Annullata",
+    }.get(p["stato"], p["stato"])
     note = (p.get("note") or "").strip()
     if truncate_note and len(note) > 80:
         note = note[:80] + "..."
@@ -635,20 +654,31 @@ def pagina_gestione():
             )
         for p in pren:
             _booking_card(p, truncate_note=False)
-            col_a, col_b, col_c = st.columns(3)
+            stato = "confermato" if p["stato"] == "confermata" else p["stato"]
+            col_a, col_b, col_c, col_d = st.columns(4)
             with col_a:
-                if p["stato"] != "confermata":
+                if stato == "in_attesa":
                     if st.button("Conferma", key=f"conf_{p['id']}", use_container_width=True):
-                        update_stato_prenotazione(p["id"], "confermata")
+                        update_stato_prenotazione(p["id"], "confermato")
                         st.toast("Prenotazione confermata")
                         st.rerun()
             with col_b:
-                if p["stato"] == "confermata":
-                    if st.button("Metti in attesa", key=f"att_{p['id']}", use_container_width=True):
-                        update_stato_prenotazione(p["id"], "in_attesa")
+                if stato in ("in_attesa", "confermato"):
+                    if st.button("Segna pagato", key=f"pay_{p['id']}", use_container_width=True, type="primary"):
+                        update_stato_prenotazione(p["id"], "pagato")
+                        st.toast("Incasso registrato")
                         st.rerun()
             with col_c:
-                if p["stato"] != "annullata":
+                if stato == "pagato":
+                    if st.button("Non pagato", key=f"unpay_{p['id']}", use_container_width=True):
+                        update_stato_prenotazione(p["id"], "confermato")
+                        st.rerun()
+                elif stato == "confermato":
+                    if st.button("In attesa", key=f"att_{p['id']}", use_container_width=True):
+                        update_stato_prenotazione(p["id"], "in_attesa")
+                        st.rerun()
+            with col_d:
+                if stato != "annullata":
                     if st.button("Annulla", key=f"ann_{p['id']}", use_container_width=True, type="secondary"):
                         update_stato_prenotazione(p["id"], "annullata")
                         st.rerun()
@@ -686,7 +716,7 @@ def pagina_gestione():
         c1.metric("Attive", stat["totale_prenotazioni"])
         c2.metric("Oggi", stat["prenotazioni_oggi"])
         c3.metric("Mese", stat["prenotazioni_mese"])
-        c4.metric("Ricavi confermati", f"€{stat['ricavi_mese']:.2f}")
+        c4.metric("Ricavi incassati", f"€{stat['ricavi_mese']:.2f}")
         all_pre = get_prenotazioni()
         if all_pre:
             df = pd.DataFrame(all_pre)
