@@ -1,11 +1,16 @@
 import base64
+import hashlib
+import hmac
 import html
 import os
+import secrets
 import textwrap
+import time
 from datetime import date, datetime, timedelta
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 from database import (
     BASE_DIR,
@@ -115,6 +120,132 @@ if "prenotazione_ok" not in st.session_state:
     st.session_state.prenotazione_ok = None
 if "staff_selezionato" not in st.session_state:
     st.session_state.staff_selezionato = None
+
+AUTH_COOKIE = "nettuno_auth"
+AUTH_DAYS = 14
+
+
+def _auth_secret():
+    try:
+        sec = _secrets()
+        key = sec.get("cookie_key")
+        if not key:
+            admin = dict(sec.get("admin", {}) or {})
+            key = admin.get("password")
+        if key:
+            return str(key)
+    except Exception:
+        pass
+    path = os.path.join(BASE_DIR, ".auth_secret")
+    if os.path.isfile(path):
+        with open(path, encoding="utf-8") as handle:
+            saved = handle.read().strip()
+            if saved:
+                return saved
+    generated = secrets.token_hex(32)
+    try:
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(generated)
+    except OSError:
+        pass
+    return generated
+
+
+def _sign_token(ruolo, staff_id, exp):
+    payload = f"{ruolo}|{int(staff_id or 0)}|{int(exp)}"
+    sig = hmac.new(_auth_secret().encode(), payload.encode(), hashlib.sha256).hexdigest()[:32]
+    return f"{payload}|{sig}"
+
+
+def _parse_token(token):
+    try:
+        ruolo, sid, exp, sig = (token or "").split("|", 3)
+        exp = int(exp)
+        if exp < int(time.time()):
+            return None
+        atteso = _sign_token(ruolo, sid, exp)
+        if not hmac.compare_digest(atteso, f"{ruolo}|{sid}|{exp}|{sig}"):
+            return None
+        if ruolo == "admin":
+            return {"ruolo": "admin", "staff_id": None}
+        if ruolo == "staff":
+            return {"ruolo": "staff", "staff_id": int(sid)}
+    except Exception:
+        return None
+    return None
+
+
+def _cookie_header():
+    try:
+        return st.context.headers.get("Cookie") or ""
+    except Exception:
+        return ""
+
+
+def _leggi_auth_cookie():
+    raw = _cookie_header()
+    for pezzo in raw.split(";"):
+        pezzo = pezzo.strip()
+        if pezzo.startswith(AUTH_COOKIE + "="):
+            return pezzo.split("=", 1)[1].strip()
+    return ""
+
+
+def _js_set_cookie(valore, giorni=AUTH_DAYS):
+    components.html(
+        "<script>"
+        f"document.cookie='{AUTH_COOKIE}='+encodeURIComponent('{valore}')+"
+        f"';max-age={int(giorni)*86400};path=/;SameSite=Lax';"
+        "</script>",
+        height=0,
+        width=0,
+    )
+
+
+def _js_clear_cookie():
+    components.html(
+        f"<script>document.cookie='{AUTH_COOKIE}=;max-age=0;path=/;SameSite=Lax';</script>",
+        height=0,
+        width=0,
+    )
+
+
+def _ripristina_login_da_cookie():
+    if st.session_state.get("logged_in"):
+        return
+    token = _leggi_auth_cookie()
+    dati = _parse_token(token)
+    if not dati:
+        return
+    if dati["ruolo"] == "admin":
+        st.session_state.logged_in = True
+        st.session_state.ruolo = "admin"
+        st.session_state.staff_id = None
+        return
+    membro = get_membro(dati["staff_id"]) if dati.get("staff_id") else None
+    if not membro or not membro.get("attivo"):
+        return
+    st.session_state.logged_in = True
+    st.session_state.ruolo = "staff"
+    st.session_state.staff_id = membro["id"]
+
+
+def _sync_auth_cookie():
+    if st.session_state.get("_pending_logout"):
+        _js_clear_cookie()
+        st.session_state.logged_in = False
+        st.session_state.ruolo = None
+        st.session_state.staff_id = None
+        st.session_state._pending_logout = False
+        st.session_state._cookie_sent = False
+        st.session_state._next_menu = "📅 Prenota"
+        return
+    _ripristina_login_da_cookie()
+    if st.session_state.get("logged_in") and not st.session_state.get("_cookie_sent"):
+        exp = int(time.time()) + AUTH_DAYS * 86400
+        token = _sign_token(st.session_state.ruolo, st.session_state.staff_id, exp)
+        _js_set_cookie(token)
+        st.session_state._cookie_sent = True
 
 
 def esc(value):
@@ -1116,12 +1247,10 @@ def main():
     primario = impostazioni.get("colore_primario") or "#1E3A5F"
     secondario = impostazioni.get("colore_secondario") or "#E94560"
     inject_css()
+    _sync_auth_cookie()
     pagina = sidebar_setup()
     if pagina == "🚪 Esci":
-        st.session_state.logged_in = False
-        st.session_state.ruolo = None
-        st.session_state.staff_id = None
-        st.session_state._next_menu = "📅 Prenota"
+        st.session_state._pending_logout = True
         st.rerun()
     if pagina == "🔐 Area riservata":
         pagina_login()

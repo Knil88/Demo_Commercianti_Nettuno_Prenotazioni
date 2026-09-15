@@ -1,4 +1,5 @@
 .streamlit/secrets.toml
+.auth_secret
 __pycache__/
 *.pyc
 .initialized
