@@ -148,6 +148,11 @@ def init_db():
         pren_cols = {row[1] for row in conn.execute("PRAGMA table_info(prenotazioni)")}
         if "staff_id" not in pren_cols:
             conn.execute("ALTER TABLE prenotazioni ADD COLUMN staff_id INTEGER")
+        staff_cols = {row[1] for row in conn.execute("PRAGMA table_info(staff)")}
+        if "username" not in staff_cols:
+            conn.execute("ALTER TABLE staff ADD COLUMN username TEXT DEFAULT ''")
+        if "password_hash" not in staff_cols:
+            conn.execute("ALTER TABLE staff ADD COLUMN password_hash TEXT DEFAULT ''")
         conn.execute("UPDATE prenotazioni SET stato = 'confermato' WHERE stato = 'confermata'")
         if not conn.execute("SELECT id FROM impostazioni LIMIT 1").fetchone():
             conn.execute("INSERT INTO impostazioni (nome_attivita) VALUES (?)", ("La Mia Attività",))
@@ -171,6 +176,7 @@ def init_db():
                 seed,
             )
         _seed_staff(conn)
+        _seed_staff_login(conn)
         _seed_prodotto(conn)
 
 
@@ -332,12 +338,90 @@ def update_impostazioni(**kwargs):
         )
 
 
+def _seed_staff_login(conn):
+    demo = {
+        "Giulia Moretti": ("giulia", "giulia2026"),
+        "Luca Bianchi": ("luca", "luca2026"),
+        "Martina Russo": ("martina", "martina2026"),
+    }
+    for row in conn.execute("SELECT id, nome, username FROM staff").fetchall():
+        if (row["username"] or "").strip():
+            continue
+        coppia = demo.get(row["nome"])
+        if not coppia:
+            continue
+        user, pwd = coppia
+        conn.execute(
+            "UPDATE staff SET username = ?, password_hash = ? WHERE id = ?",
+            (user, hash_password(pwd), row["id"]),
+        )
+
+
 def verify_admin(username, password):
     imp = get_impostazioni()
     stored_user = (imp.get("admin_username") or DEFAULT_ADMIN_USERNAME).strip()
     if username.strip() != stored_user:
         return False
     return verify_password(password, imp.get("admin_password_hash") or "")
+
+
+def verify_staff(username, password):
+    user = (username or "").strip().lower()
+    if not user or not password:
+        return None
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM staff WHERE lower(trim(username)) = ?",
+            (user,),
+        ).fetchone()
+    if not row:
+        return None
+    if not verify_password(password, row["password_hash"] or ""):
+        return None
+    return dict(row)
+
+
+def username_occupato(username, exclude_staff_id=None):
+    user = (username or "").strip().lower()
+    if not user:
+        return False
+    admin = (get_impostazioni().get("admin_username") or DEFAULT_ADMIN_USERNAME).strip().lower()
+    if user == admin:
+        return True
+    with get_connection() as conn:
+        if exclude_staff_id is None:
+            row = conn.execute(
+                "SELECT id FROM staff WHERE lower(trim(username)) = ?",
+                (user,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT id FROM staff WHERE lower(trim(username)) = ? AND id != ?",
+                (user, exclude_staff_id),
+            ).fetchone()
+    return bool(row)
+
+
+def set_staff_credenziali(staff_id, username, password):
+    user = (username or "").strip().lower()
+    if user and username_occupato(user, exclude_staff_id=staff_id):
+        return False, "Questo utente è già usato (admin o altro operatore)."
+    with get_connection() as conn:
+        row = conn.execute("SELECT password_hash FROM staff WHERE id = ?", (staff_id,)).fetchone()
+        if not row:
+            return False, "Operatore non trovato."
+        pwd_hash = row["password_hash"] or ""
+        if (password or "").strip():
+            if len(password.strip()) < 6:
+                return False, "La password deve avere almeno 6 caratteri."
+            pwd_hash = hash_password(password.strip())
+        elif user and not pwd_hash:
+            return False, "Imposta anche una password."
+        conn.execute(
+            "UPDATE staff SET username = ?, password_hash = ? WHERE id = ?",
+            (user, pwd_hash, staff_id),
+        )
+    return True, None
 
 
 def get_servizi(includi_disattivi=False):
@@ -401,7 +485,7 @@ def get_prenotazione(prenotazione_id):
     return dict(row) if row else None
 
 
-def get_prenotazioni(data=None, stato=None):
+def get_prenotazioni(data=None, stato=None, staff_id=None):
     query = """SELECT p.*, s.nome AS servizio_nome, s.descrizione AS servizio_descrizione,
                       s.durata_minuti, s.prezzo AS servizio_prezzo,
                       st.nome AS staff_nome, st.ruolo AS staff_ruolo, st.foto_path AS staff_foto
@@ -416,6 +500,9 @@ def get_prenotazioni(data=None, stato=None):
     if stato:
         query += " AND p.stato = ?"
         params.append(stato)
+    if staff_id is not None:
+        query += " AND p.staff_id = ?"
+        params.append(staff_id)
     query += " ORDER BY p.data_prenotazione, p.ora_prenotazione"
     with get_connection() as conn:
         rows = conn.execute(query, params).fetchall()
@@ -563,30 +650,36 @@ def cancella_prenotazione(prenotazione_id):
         conn.execute("DELETE FROM prenotazioni WHERE id = ?", (prenotazione_id,))
 
 
-def get_statistiche():
+def get_statistiche(staff_id=None):
     oggi = datetime.now().strftime("%Y-%m-%d")
     mese = datetime.now().strftime("%Y-%m")
+    extra = " AND staff_id = ?" if staff_id is not None else ""
+    params_oggi = (oggi, staff_id) if staff_id is not None else (oggi,)
+    params_mese = (mese, staff_id) if staff_id is not None else (mese,)
+    params_tot = (staff_id,) if staff_id is not None else ()
     with get_connection() as conn:
         totale = conn.execute(
-            "SELECT COUNT(*) AS n FROM prenotazioni WHERE stato != 'annullata'"
+            f"SELECT COUNT(*) AS n FROM prenotazioni WHERE stato != 'annullata'{extra}",
+            params_tot,
         ).fetchone()["n"]
         oggi_n = conn.execute(
-            """SELECT COUNT(*) AS n FROM prenotazioni
-               WHERE data_prenotazione = ? AND stato != 'annullata'""",
-            (oggi,),
+            f"""SELECT COUNT(*) AS n FROM prenotazioni
+               WHERE data_prenotazione = ? AND stato != 'annullata'{extra}""",
+            params_oggi,
         ).fetchone()["n"]
         mese_n = conn.execute(
-            """SELECT COUNT(*) AS n FROM prenotazioni
-               WHERE strftime('%Y-%m', data_prenotazione) = ? AND stato != 'annullata'""",
-            (mese,),
+            f"""SELECT COUNT(*) AS n FROM prenotazioni
+               WHERE strftime('%Y-%m', data_prenotazione) = ? AND stato != 'annullata'{extra}""",
+            params_mese,
         ).fetchone()["n"]
+        extra_p = " AND p.staff_id = ?" if staff_id is not None else ""
         ricavi_row = conn.execute(
-            """SELECT SUM(s.prezzo) AS totale
+            f"""SELECT SUM(s.prezzo) AS totale
                FROM prenotazioni p
                LEFT JOIN servizi s ON p.servizio_id = s.id
                WHERE strftime('%Y-%m', p.data_prenotazione) = ?
-                 AND p.stato = 'pagato'""",
-            (mese,),
+                 AND p.stato = 'pagato'{extra_p}""",
+            params_mese,
         ).fetchone()
         ricavi = ricavi_row["totale"] if ricavi_row and ricavi_row["totale"] else 0
     return {

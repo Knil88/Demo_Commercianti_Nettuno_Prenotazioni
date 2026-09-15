@@ -32,6 +32,7 @@ from database import (
     hash_password,
     init_db,
     remove_assenza,
+    set_staff_credenziali,
     set_staff_orari,
     slot_occupato,
     update_impostazioni,
@@ -40,6 +41,7 @@ from database import (
     update_staff,
     update_stato_prenotazione,
     verify_admin,
+    verify_staff,
 )
 from email_utils import invia_email, notifica_nuova_prenotazione, smtp_configurato
 
@@ -103,6 +105,10 @@ secondario = impostazioni.get("colore_secondario") or "#E94560"
 
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
+if "ruolo" not in st.session_state:
+    st.session_state.ruolo = None
+if "staff_id" not in st.session_state:
+    st.session_state.staff_id = None
 if "servizio_selezionato" not in st.session_state:
     st.session_state.servizio_selezionato = None
 if "prenotazione_ok" not in st.session_state:
@@ -270,9 +276,19 @@ def render_header(subtitle=None):
     html_md("".join(parts))
 
 
+def is_admin():
+    return st.session_state.get("logged_in") and st.session_state.get("ruolo") == "admin"
+
+
+def is_operatore():
+    return st.session_state.get("logged_in") and st.session_state.get("ruolo") == "staff"
+
+
 def sidebar_setup():
-    if st.session_state.logged_in:
+    if is_admin():
         options = ["🏠 Home", "📅 Prenota", "📋 Gestione", "⚙️ Configura", "🚪 Esci"]
+    elif is_operatore():
+        options = ["👤 I miei appuntamenti", "📅 Prenota", "🚪 Esci"]
     else:
         options = ["📅 Prenota", "🔐 Area riservata"]
     # Cambia pagina solo prima di st.radio(key="menu"), mai dopo.
@@ -292,11 +308,14 @@ def sidebar_setup():
             f"</div>"
         )
         pagina = st.radio("Menu", options, key="menu", label_visibility="collapsed")
-        if st.session_state.logged_in:
-            st.caption("Sei nell'area staff")
+        if is_admin():
+            st.caption("Accesso: titolare")
+        elif is_operatore():
+            membro = get_membro(st.session_state.staff_id) if st.session_state.staff_id else None
+            st.caption(f"Operatore: {membro['nome'] if membro else 'staff'}")
         else:
             st.caption("Prenota come cliente · lo staff conferma l'appuntamento")
-        if st.session_state.logged_in and not smtp_configurato(impostazioni):
+        if is_admin() and not smtp_configurato(impostazioni):
             st.warning("Email non configurata: le nuove prenotazioni non avvisano il negozio.")
         html_md(
             f'<p class="product-foot" style="margin-top:1.5rem;">'
@@ -312,31 +331,51 @@ def _login_ok(username, password):
         admin = dict(_secrets().get("admin", {}) or {})
         su, sp = admin.get("username"), admin.get("password")
         if su and sp and username.strip() == str(su).strip() and password == str(sp):
-            return True
+            return {"ruolo": "admin"}
     except Exception:
         pass
-    return verify_admin(username, password)
+    if verify_admin(username, password):
+        return {"ruolo": "admin"}
+    membro = verify_staff(username, password)
+    if membro:
+        if not membro.get("attivo"):
+            return {"errore": "Questo account non è in servizio. Chiedi al titolare."}
+        return {"ruolo": "staff", "staff": membro}
+    return None
 
 
 def pagina_login():
-    render_header("Area staff")
+    render_header("Area riservata")
     st.markdown('<h2 class="section-title"><i class="fas fa-lock"></i> Accedi</h2>', unsafe_allow_html=True)
-    st.write("Solo il titolare e lo staff gestiscono agenda e impostazioni.")
+    st.write("Il titolare vede tutto il salone. Ogni operatore vede **solo i suoi** appuntamenti.")
     with st.form("login_form"):
         username = st.text_input("Utente")
         password = st.text_input("Password", type="password")
         submitted = st.form_submit_button("Entra", use_container_width=True, type="primary")
     if submitted:
-        if _login_ok(username, password):
+        esito = _login_ok(username, password)
+        if esito and esito.get("errore"):
+            st.error(esito["errore"])
+        elif esito and esito.get("ruolo") == "admin":
             st.session_state.logged_in = True
+            st.session_state.ruolo = "admin"
+            st.session_state.staff_id = None
             st.session_state._next_menu = "🏠 Home"
-            st.toast("Accesso effettuato")
+            st.toast("Accesso titolare")
+            st.rerun()
+        elif esito and esito.get("ruolo") == "staff":
+            st.session_state.logged_in = True
+            st.session_state.ruolo = "staff"
+            st.session_state.staff_id = esito["staff"]["id"]
+            st.session_state._next_menu = "👤 I miei appuntamenti"
+            st.toast(f"Ciao {esito['staff']['nome']}")
             st.rerun()
         else:
             st.error("Utente o password non corretti.")
     with st.expander("Account demo"):
-        st.caption(f"Utente `{DEFAULT_ADMIN_USERNAME}` · password `{DEFAULT_ADMIN_PASSWORD}`")
-        st.caption("In produzione cambiala da Impostazioni → Accesso, oppure usa i Secrets del deploy.")
+        st.caption(f"Titolare: `{DEFAULT_ADMIN_USERNAME}` / `{DEFAULT_ADMIN_PASSWORD}`")
+        st.caption("Operatori: `giulia` / `giulia2026` · `luca` / `luca2026` · `martina` / `martina2026`")
+        st.caption("L'admin crea o cambia le credenziali da Configura → Staff.")
 
 
 def pagina_home():
@@ -480,8 +519,14 @@ def pagina_prenota():
         f"</div>"
     )
 
+    if is_operatore() and st.session_state.staff_id:
+        st.session_state.staff_selezionato = st.session_state.staff_id
+        me = get_membro(st.session_state.staff_id)
+        if me:
+            st.info(f"Stai prenotando per **{me['nome']}** (il tuo calendario).")
+
     staff_list = get_staff()
-    if staff_list:
+    if staff_list and not is_operatore():
         st.markdown('<h3 class="section-title"><i class="fas fa-users"></i> Chi vuoi</h3>', unsafe_allow_html=True)
         n_staff = min(3, len(staff_list))
         srows = [staff_list[i : i + n_staff] for i in range(0, len(staff_list), n_staff)]
@@ -505,7 +550,7 @@ def pagina_prenota():
         if not st.session_state.staff_selezionato:
             st.info("Scegli chi ti seguirà, poi vedi gli orari in cui è in salone.")
             return
-    else:
+    elif not staff_list:
         st.session_state.staff_selezionato = None
 
     col_data, col_ora = st.columns(2)
@@ -640,13 +685,24 @@ def _fmt_data(data_iso):
         return esc(data_iso)
 
 
-def pagina_gestione():
-    render_header("Gestione prenotazioni")
-    st.markdown('<h2 class="section-title"><i class="fas fa-tasks"></i> Agenda</h2>', unsafe_allow_html=True)
-    tab1, tab2, tab3 = st.tabs(["Agenda", "Statistiche", "Elimina"])
+def pagina_gestione(solo_staff_id=None):
+    if solo_staff_id:
+        me = get_membro(solo_staff_id)
+        render_header(f"I tuoi appuntamenti{(' · ' + me['nome']) if me else ''}")
+        st.markdown('<h2 class="section-title"><i class="fas fa-calendar-day"></i> La tua agenda</h2>', unsafe_allow_html=True)
+        st.caption("Vedi solo gli appuntamenti assegnati a te. Puoi confermare, segnare il pagamento o annullare.")
+        tab1 = st.container()
+        tab2 = tab3 = None
+    else:
+        render_header("Gestione prenotazioni")
+        st.markdown('<h2 class="section-title"><i class="fas fa-tasks"></i> Agenda</h2>', unsafe_allow_html=True)
+        tab1, tab2, tab3 = st.tabs(["Agenda", "Statistiche", "Elimina"])
     with tab1:
         data_selezionata = st.date_input("Seleziona data", value=datetime.now())
-        pren = get_prenotazioni(data=data_selezionata.strftime("%Y-%m-%d"))
+        pren = get_prenotazioni(
+            data=data_selezionata.strftime("%Y-%m-%d"),
+            staff_id=solo_staff_id,
+        )
         if not pren:
             st.markdown(
                 '<div class="empty-state"><i class="fas fa-calendar-xmark"></i><p>Nessuna prenotazione per questa data</p></div>',
@@ -683,7 +739,7 @@ def pagina_gestione():
                         update_stato_prenotazione(p["id"], "annullata")
                         st.rerun()
             staff_all = get_staff(includi_inattivi=True)
-            if staff_all and p["stato"] != "annullata":
+            if staff_all and p["stato"] != "annullata" and not solo_staff_id:
                 ids = [s["id"] for s in staff_all]
                 labels = {
                     s["id"]: s["nome"] + ("" if s.get("attivo") else " (non in servizio)")
@@ -710,6 +766,8 @@ def pagina_gestione():
                         update_prenotazione_staff(p["id"], nuovo)
                         st.toast("Staff aggiornato")
                         st.rerun()
+    if tab2 is None:
+        return
     with tab2:
         stat = get_statistiche()
         c1, c2, c3, c4 = st.columns(4)
@@ -866,6 +924,32 @@ def pagina_configura():
                     update_staff(membro["id"], nome_s, ruolo_s, foto_path, in_servizio)
                     st.toast("Profilo staff salvato")
                     st.rerun()
+                st.markdown("**Accesso operatore**")
+                st.caption("L'operatore entra da Area riservata e vede solo i suoi appuntamenti.")
+                u1, u2 = st.columns(2)
+                user_s = u1.text_input(
+                    "Utente",
+                    value=membro.get("username") or "",
+                    key=f"stu_{membro['id']}",
+                    placeholder="es. giulia",
+                )
+                pwd_s = u2.text_input(
+                    "Nuova password",
+                    type="password",
+                    key=f"stp_{membro['id']}",
+                    placeholder="Lascia vuoto per non cambiare",
+                )
+                if membro.get("username"):
+                    st.caption(f"Login attuale: `{membro.get('username')}`")
+                else:
+                    st.caption("Nessun accesso: imposta utente e password.")
+                if st.button("Salva credenziali", key=f"stcred_{membro['id']}"):
+                    ok, err = set_staff_credenziali(membro["id"], user_s, pwd_s)
+                    if ok:
+                        st.toast("Credenziali aggiornate")
+                        st.rerun()
+                    else:
+                        st.error(err)
                 st.markdown("**Orari della settimana**")
                 orari = get_staff_orari(membro["id"])
                 nuovi = []
@@ -903,13 +987,21 @@ def pagina_configura():
             nn, nr = st.columns(2)
             nuovo_nome_s = nn.text_input("Nome")
             nuovo_ruolo_s = nr.text_input("Ruolo", placeholder="Colorista, stylist…")
+            nu, np = st.columns(2)
+            nuovo_user_s = nu.text_input("Utente accesso", placeholder="es. anna")
+            nuovo_pwd_s = np.text_input("Password accesso", type="password")
             nuova_foto_s = st.file_uploader("Foto", type=["png", "jpg", "jpeg", "webp"])
             if st.form_submit_button("Aggiungi staff", type="primary"):
                 if not (nuovo_nome_s or "").strip():
                     st.error("Serve almeno il nome.")
                 else:
                     foto_path = _salva_logo(nuova_foto_s) if nuova_foto_s else ""
-                    add_staff(nuovo_nome_s.strip(), nuovo_ruolo_s.strip(), foto_path)
+                    sid = add_staff(nuovo_nome_s.strip(), nuovo_ruolo_s.strip(), foto_path)
+                    if (nuovo_user_s or "").strip() or (nuovo_pwd_s or "").strip():
+                        ok, err = set_staff_credenziali(sid, nuovo_user_s, nuovo_pwd_s)
+                        if not ok:
+                            st.warning(f"Membro creato, ma accesso non salvato: {err}")
+                            st.stop()
                     st.toast("Membro aggiunto")
                     st.rerun()
 
@@ -1027,16 +1119,30 @@ def main():
     pagina = sidebar_setup()
     if pagina == "🚪 Esci":
         st.session_state.logged_in = False
+        st.session_state.ruolo = None
+        st.session_state.staff_id = None
         st.session_state._next_menu = "📅 Prenota"
         st.rerun()
     if pagina == "🔐 Area riservata":
         pagina_login()
         return
-    if pagina in ("🏠 Home", "📋 Gestione", "⚙️ Configura") and not st.session_state.logged_in:
+    if pagina in ("🏠 Home", "📋 Gestione", "⚙️ Configura") and not is_admin():
+        if is_operatore():
+            pagina_gestione(solo_staff_id=st.session_state.staff_id)
+            html_md(
+                f'<p class="product-foot">© {datetime.now().year} {esc(impostazioni.get("nome_attivita") or "")}'
+                f" · prenotazione diretta, senza commissioni</p>"
+            )
+            return
         pagina_login()
         return
     if pagina == "🏠 Home":
         pagina_home()
+    elif pagina == "👤 I miei appuntamenti":
+        if not is_operatore():
+            pagina_login()
+            return
+        pagina_gestione(solo_staff_id=st.session_state.staff_id)
     elif pagina == "📅 Prenota":
         pagina_prenota()
     elif pagina == "📋 Gestione":
