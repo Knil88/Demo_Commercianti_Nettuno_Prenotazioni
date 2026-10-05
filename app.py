@@ -95,18 +95,43 @@ def _page_icon():
     return "✂️"
 
 
+AUTH_COOKIE = "nettuno_auth"
+AUTH_DAYS = 14
+
+# Voci di menu: costanti perché la stringa va confrontata in più punti.
+# Con gli emoji inline un refactor cambiava la rotta e la pagina restava vuota.
+MENU_HOME = "🏠 Home"
+MENU_PRENOTA = "📅 Prenota"
+MENU_GESTIONE = "📋 Gestione"
+MENU_CONFIGURA = "⚙️ Configura"
+MENU_ESCI = "🚪 Esci"
+MENU_AREA = "🔐 Area riservata"
+MENU_APPUNTAMENTI = "👤 I miei appuntamenti"
+
+
+def _cookie_header():
+    try:
+        return st.context.headers.get("Cookie") or ""
+    except Exception:
+        return ""
+
+
 _boot = get_impostazioni()
 st.set_page_config(
     page_title=f"{_boot.get('nome_attivita') or 'Prenota'} · Prenota online",
     page_icon=_page_icon(),
     layout="wide",
-    initial_sidebar_state="expanded",
+    # La navigazione è in alto: la sidebar resta chiusa anche per l'admin.
+    initial_sidebar_state="collapsed",
     menu_items={"Get help": None, "Report a bug": None, "About": None},
 )
 
 impostazioni = load_impostazioni()
 primario = impostazioni.get("colore_primario") or "#1E3A5F"
 secondario = impostazioni.get("colore_secondario") or "#E94560"
+
+# False durante lo sviluppo per rivedere Rerun, impostazioni e tema di Streamlit.
+NASCONDI_TOOLBAR = True
 
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
@@ -120,9 +145,6 @@ if "prenotazione_ok" not in st.session_state:
     st.session_state.prenotazione_ok = None
 if "staff_selezionato" not in st.session_state:
     st.session_state.staff_selezionato = None
-
-AUTH_COOKIE = "nettuno_auth"
-AUTH_DAYS = 14
 
 
 def _auth_secret():
@@ -175,13 +197,6 @@ def _parse_token(token):
     return None
 
 
-def _cookie_header():
-    try:
-        return st.context.headers.get("Cookie") or ""
-    except Exception:
-        return ""
-
-
 def _leggi_auth_cookie():
     raw = _cookie_header()
     for pezzo in raw.split(";"):
@@ -191,8 +206,17 @@ def _leggi_auth_cookie():
     return ""
 
 
+def _html_script(markup, **kwargs):
+    """st.iframe sostituisce components.html dal 1.65; il fallback copre versioni vecchie."""
+    if hasattr(st, "iframe"):
+        # st.iframe rifiuta width/height 0: 1px resta invisibile come il vecchio 0.
+        st.iframe(markup, **{k: (1 if v == 0 else v) for k, v in kwargs.items()})
+    else:
+        components.html(markup, **kwargs)
+
+
 def _js_set_cookie(valore, giorni=AUTH_DAYS):
-    components.html(
+    _html_script(
         "<script>"
         f"document.cookie='{AUTH_COOKIE}='+encodeURIComponent('{valore}')+"
         f"';max-age={int(giorni)*86400};path=/;SameSite=Lax';"
@@ -203,7 +227,7 @@ def _js_set_cookie(valore, giorni=AUTH_DAYS):
 
 
 def _js_clear_cookie():
-    components.html(
+    _html_script(
         f"<script>document.cookie='{AUTH_COOKIE}=;max-age=0;path=/;SameSite=Lax';</script>",
         height=0,
         width=0,
@@ -238,7 +262,7 @@ def _sync_auth_cookie():
         st.session_state.staff_id = None
         st.session_state._pending_logout = False
         st.session_state._cookie_sent = False
-        st.session_state._next_menu = "📅 Prenota"
+        st.session_state._next_menu = MENU_PRENOTA
         return
     _ripristina_login_da_cookie()
     if st.session_state.get("logged_in") and not st.session_state.get("_cookie_sent"):
@@ -288,60 +312,172 @@ def logo_data_uri(path):
 
 
 def inject_css():
+    # Niente commenti CSS dentro <style>: il pipeline markdown di Streamlit tratta
+    # il carattere '*' come emphasis e finisce per iniettare un </style> a metà,
+    # riversando il resto del CSS come testo visibile.
+    css_toolbar = (
+        '[data-testid="stToolbar"], [data-testid="stHeaderActionElements"], '
+        '[data-testid="stStatusWidget"] { display: none !important; }\n'
+        '[data-testid="stHeader"] { background: transparent !important; '
+        "height: 0 !important; min-height: 0 !important; }"
+        if NASCONDI_TOOLBAR
+        else ""
+    )
+    # Due note sul blocco <style> che segue:
+    # 1) niente commenti CSS: il pipeline markdown di Streamlit tratta '*' come
+    #    emphasis e inietta un </style> a metà, riversando il CSS come testo;
+    # 2) va iniettato con st.markdown, non st.html: DOMPurify svuota lo <style>.
     html_md(
         f"""
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:ital,wght@0,500;0,600;0,700;1,500&display=swap');
 * {{ box-sizing: border-box; }}
-.stApp {{ background-color: #F4F1EC; font-family: 'Inter', sans-serif; }}
-.block-container {{ padding-top: 2.2rem; max-width: 1100px; }}
-section[data-testid="stSidebar"] {{ background: #fff; }}
-section[data-testid="stSidebar"] .stRadio > label {{ display: none; }}
+:root, .stApp {{
+    --rag-xl: 26px;
+    --rag-lg: 20px;
+    --rag-md: 14px;
+    --rag-pill: 999px;
+    --ombra-sm: 0 4px 14px rgba(30,58,95,.07);
+    --ombra-md: 0 10px 30px rgba(30,58,95,.11);
+    --ombra-lg: 0 18px 46px rgba(30,58,95,.17);
+    --ink: #2A3242;
+    --muted: #6E7686;
+    --hairline: #ECE6EC;
+}}
+.stApp {{
+    background-color: #F8F5F7;
+    background-image:
+        radial-gradient(circle at 10% 6%, rgba(233,69,96,.055), transparent 44%),
+        radial-gradient(circle at 92% 2%, rgba(30,58,95,.06), transparent 40%);
+    background-attachment: fixed;
+    font-family: 'Inter', sans-serif;
+    color: var(--ink);
+}}
+.block-container {{ padding-top: 1.5rem; max-width: 1060px; padding-bottom: 3rem; }}
+.st-key-topnav {{ margin-bottom: 1.1rem; }}
+.st-key-topnav .stButton > button {{
+    background: #fff; color: var(--ink); border: 1px solid var(--hairline);
+    border-radius: var(--rag-pill); padding: 0.5rem 1rem; font-weight: 600;
+    box-shadow: var(--ombra-sm); transition: all .2s ease;
+}}
+.st-key-topnav .stButton > button:hover {{
+    border-color: {secondario}; color: {primario};
+    transform: translateY(-1px); box-shadow: var(--ombra-md);
+}}
+.st-key-topnav button[data-testid="stBaseButton-primary"] {{
+    background: linear-gradient(135deg, {primario}, {secondario});
+    color: #fff; border: none; box-shadow: 0 8px 20px rgba(30,58,95,.22);
+}}
+.st-key-topnav button[data-testid="stBaseButton-primary"]:hover {{
+    color: #fff; transform: translateY(-1px); box-shadow: 0 12px 26px rgba(30,58,95,.30);
+}}
+section[data-testid="stSidebar"] {{
+    background: linear-gradient(180deg, #FFFFFF 0%, #FCF8FA 100%);
+    border-right: 1px solid var(--hairline);
+    display: none !important;
+}}
+[data-testid="stExpandSidebarButton"] {{ display: none !important; }}
 @keyframes fadeInUp {{ from {{ opacity: 0; transform: translateY(20px); }} to {{ opacity: 1; transform: translateY(0); }} }}
 @keyframes fadeInDown {{ from {{ opacity: 0; transform: translateY(-20px); }} to {{ opacity: 1; transform: translateY(0); }} }}
 @keyframes slideInLeft {{ from {{ opacity: 0; transform: translateX(-16px); }} to {{ opacity: 1; transform: translateX(0); }} }}
 @keyframes expandLine {{ to {{ width: 100%; }} }}
 .header {{
     background: linear-gradient(135deg, {primario}, {secondario});
-    padding: 1.8rem 1.5rem; border-radius: 16px; color: #fff; text-align: center;
-    margin-bottom: 1.5rem; box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+    padding: 2.2rem 1.6rem; border-radius: var(--rag-xl); color: #fff; text-align: center;
+    margin-bottom: 1.6rem; box-shadow: var(--ombra-lg);
     animation: fadeInDown 0.6s ease-out;
+    position: relative; overflow: hidden;
 }}
-.header img {{ width: 90px; height: 90px; object-fit: cover; border-radius: 12px; margin-bottom: 0.6rem; }}
-.header h1 {{ font-size: 2rem; margin: 0; color: #fff; }}
-.header p {{ margin: 0.4rem 0 0; opacity: 0.95; font-size: 1rem; color: #fff; }}
+.header::after {{
+    content: ''; position: absolute; inset: 0; pointer-events: none;
+    background: linear-gradient(180deg, rgba(255,255,255,.20), rgba(255,255,255,0) 58%);
+}}
+.header img {{
+    width: 96px; height: 96px; object-fit: cover; border-radius: 50%; margin-bottom: 0.75rem;
+    border: 3px solid rgba(255,255,255,.85); box-shadow: 0 10px 26px rgba(0,0,0,.24);
+    position: relative; z-index: 1;
+}}
+.header h1 {{
+    font-family: 'Playfair Display', serif; font-size: 2.35rem; font-weight: 700;
+    margin: 0; color: #fff; letter-spacing: -.01em; position: relative; z-index: 1;
+}}
+.header p {{
+    margin: 0.45rem 0 0; opacity: .94; font-size: 0.97rem; color: #fff;
+    position: relative; z-index: 1;
+}}
+.header .header-photo {{
+    position: absolute; inset: 0; z-index: 0;
+    background-size: cover; background-position: center;
+}}
+.header .header-veil {{
+    position: absolute; inset: 0; z-index: 0;
+    background: linear-gradient(180deg, rgba(0,0,0,.38), rgba(0,0,0,.62));
+}}
+.header .header-body {{
+    position: relative; z-index: 1;
+    background: rgba(20,24,34,.42);
+    border: 1px solid rgba(255,255,255,.28);
+    border-radius: calc(var(--rag-lg) - 4px);
+    padding: 1.4rem 1.6rem; margin: 0 auto; max-width: 620px;
+    backdrop-filter: blur(3px);
+}}
+.steps {{
+    display: flex; align-items: center; justify-content: center; flex-wrap: wrap;
+    gap: 0.15rem; background: #fff; border: 1px solid var(--hairline);
+    border-radius: var(--rag-pill); padding: 0.45rem 0.8rem; margin-bottom: 1.6rem;
+    box-shadow: var(--ombra-sm);
+}}
+.step {{ display: flex; align-items: center; gap: 0.5rem; padding: 0.2rem 0.6rem; border-radius: var(--rag-pill); }}
+.step .num {{
+    width: 26px; height: 26px; border-radius: 50%; flex: none;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 0.76rem; font-weight: 700; background: #F2EDF1; color: var(--muted);
+}}
+.step .txt {{ font-size: 0.83rem; color: var(--muted); white-space: nowrap; }}
+.step.done .num {{ background: rgba(39,174,96,.16); color: #1d7a45; }}
+.step.done .txt {{ color: #4a5563; }}
+.step.active {{ background: linear-gradient(135deg, {primario}, {secondario}); box-shadow: 0 6px 16px rgba(30,58,95,.20); }}
+.step.active .num {{ background: rgba(255,255,255,.24); color: #fff; }}
+.step.active .txt {{ color: #fff; font-weight: 600; }}
+.step-sep {{ color: #DCD2DA; font-size: 0.75rem; }}
 .metric-card {{
-    background: white; padding: 1.15rem 0.7rem 1.05rem;
-    border-radius: 16px; box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+    background: #fff; padding: 1.2rem 0.7rem 1.1rem;
+    border-radius: var(--rag-lg); box-shadow: var(--ombra-sm);
     text-align: center; border-top: 4px solid {primario};
     animation: fadeInUp 0.5s ease-out both;
-    min-height: 148px; height: 100%;
+    min-height: 152px; height: 100%;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
 }}
-.metric-icon {{ font-size: 1.35rem; color: {primario}; margin-bottom: 0.4rem; line-height: 1; }}
+.metric-icon {{ font-size: 1.4rem; color: {secondario}; margin-bottom: 0.45rem; line-height: 1; }}
 .metric-value {{
-    font-size: 1.7rem; font-weight: 700; color: {primario};
-    line-height: 1.15; white-space: nowrap; letter-spacing: -0.02em;
+    font-family: 'Playfair Display', serif;
+    font-size: 1.95rem; font-weight: 700; color: {primario};
+    line-height: 1.1; white-space: nowrap; letter-spacing: -.01em;
 }}
-.metric-label {{ color: #888; font-size: 0.78rem; margin-top: 0.35rem; line-height: 1.25; }}
-[data-testid="stHeaderActionElements"] {{ display: none !important; }}
-.card, .booking-item, .service-pick, .recap-box {{
-    background: white; border-radius: 12px; padding: 1.2rem 1.4rem;
-    margin-bottom: 0.6rem; box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+.metric-label {{ color: var(--muted); font-size: 0.78rem; margin-top: 0.35rem; line-height: 1.25; }}
+{css_toolbar}
+.card, .booking-item, .service-pick, .recap-box, .staff-pick {{
+    background: #fff; border: 1px solid var(--hairline); border-radius: var(--rag-lg);
+    padding: 1.3rem 1.5rem; margin-bottom: 0.7rem; box-shadow: var(--ombra-sm);
+    transition: box-shadow .25s ease, transform .25s ease;
 }}
 .booking-item {{ border-left: 4px solid {secondario}; animation: slideInLeft 0.35s ease-out both; }}
 .booking-item.confermato, .booking-item.confermata {{ border-left-color: #27ae60; }}
 .booking-item.pagato {{ border-left-color: #1a7f9e; }}
 .booking-item.in_attesa {{ border-left-color: #f39c12; }}
 .booking-item.annullata {{ border-left-color: #95a5a6; opacity: 0.7; }}
-.status-badge {{ display: inline-block; padding: 0.25rem 0.75rem; border-radius: 20px; font-size: 0.8rem; font-weight: 600; }}
+.status-badge {{
+    display: inline-block; padding: 0.28rem 0.85rem; border-radius: var(--rag-pill);
+    font-size: 0.78rem; font-weight: 600; letter-spacing: .01em;
+}}
 .status-confermato, .status-confermata {{ background: #d4edda; color: #155724; }}
 .status-pagato {{ background: #d6eef6; color: #0c5460; }}
 .status-in_attesa {{ background: #fff3cd; color: #856404; }}
-.status-annullata {{ background: #e2e3e5; color: #383d41; }}
+.status-annullata {{ background: #e8e4e9; color: #4a4a52; }}
 .section-title {{
-    font-size: 1.4rem; font-weight: 600; color: {primario};
+    font-family: 'Playfair Display', serif;
+    font-size: 1.6rem; font-weight: 600; color: {primario};
     border-bottom: 3px solid {primario}; padding-bottom: 0.5rem; margin-bottom: 1.2rem;
     position: relative; display: inline-block;
 }}
@@ -349,35 +485,86 @@ section[data-testid="stSidebar"] .stRadio > label {{ display: none; }}
     content: ''; position: absolute; bottom: -3px; left: 0; width: 0; height: 3px;
     background: {secondario}; animation: expandLine 0.8s ease-out 0.2s forwards;
 }}
-.empty-state {{ text-align: center; padding: 3rem; color: #888; }}
+.empty-state {{ text-align: center; padding: 3rem; color: var(--muted); }}
 .empty-state i {{ font-size: 3rem; margin-bottom: 1rem; display: block; color: {primario}; }}
 .service-pick {{
-    border-left: 4px solid {primario};
-    min-height: 170px;
-    height: 100%;
+    border-left: 4px solid {primario}; position: relative;
+    min-height: 178px; height: 100%;
 }}
-.service-pick.selected {{ border-left-color: {secondario}; box-shadow: 0 8px 24px rgba(0,0,0,0.12); }}
+.service-pick:hover, .staff-pick:hover {{ transform: translateY(-2px); box-shadow: var(--ombra-md); }}
+.service-pick.selected {{
+    border-left-color: {secondario}; transform: translateY(-2px);
+    box-shadow: var(--ombra-md), inset 0 0 0 2px {secondario};
+}}
+.service-pick.selected::before, .staff-pick.selected::before {{
+    content: '\\f00c'; font-family: 'Font Awesome 6 Free'; font-weight: 900;
+    position: absolute; top: 14px; right: 16px; width: 26px; height: 26px;
+    border-radius: 50%; background: {secondario}; color: #fff;
+    display: flex; align-items: center; justify-content: center; font-size: 0.68rem;
+}}
 .service-pick h3 {{
-    margin: 0 0 0.45rem; color: {primario}; font-size: 1.35rem; line-height: 1.25;
+    font-family: 'Playfair Display', serif;
+    margin: 0 0 0.45rem; color: {primario}; font-size: 1.45rem; line-height: 1.25;
     word-break: normal; overflow-wrap: break-word; hyphens: none;
 }}
-.service-pick p {{ color: #555; font-size: 0.95rem; margin: 0 0 0.8rem; min-height: 2.6em; }}
-.recap-box {{ border-left: 4px solid {primario}; }}
+.service-pick p {{ color: #555; font-size: 0.95rem; margin: 0 0 0.85rem; min-height: 2.6em; }}
+.service-pick strong {{ color: {primario}; font-size: 1rem; }}
+.recap-box {{ border-left: 4px solid {primario}; background: linear-gradient(135deg, #fff, #FDF7F9); }}
 .staff-pick {{
-    border-left: 4px solid {primario};
-    text-align: center;
-    min-height: 210px;
+    border-left: 4px solid {primario}; position: relative;
+    text-align: center; min-height: 215px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
 }}
-.staff-pick.selected {{ border-left-color: {secondario}; box-shadow: 0 8px 24px rgba(0,0,0,0.12); }}
+.staff-pick.selected {{
+    border-left-color: {secondario}; transform: translateY(-2px);
+    box-shadow: var(--ombra-md), inset 0 0 0 2px {secondario};
+}}
 .staff-pick.offline {{ opacity: 0.5; }}
 .staff-pick img {{
-    width: 88px; height: 88px; border-radius: 50%; object-fit: cover;
-    margin: 0 auto 0.6rem; display: block; background: #eee;
+    width: 90px; height: 90px; border-radius: 50%; object-fit: cover;
+    margin: 0 auto 0.65rem; display: block; background: #eee;
+    border: 2px solid #fff; box-shadow: 0 6px 18px rgba(30,58,95,.16);
 }}
-.staff-pick h3 {{ margin: 0.2rem 0 0.15rem; color: {primario}; font-size: 1.05rem; }}
-.staff-pick p {{ color: #666; font-size: 0.85rem; margin: 0; }}
-.stButton > button {{ border-radius: 10px; }}
-.product-foot {{ text-align: center; color: #8a8a8a; font-size: 0.8rem; margin-top: 2.5rem; padding-bottom: 1rem; }}
+.staff-pick h3 {{ font-family: 'Playfair Display', serif; margin: 0.2rem 0 0.15rem; color: {primario}; font-size: 1.15rem; }}
+.staff-pick p {{ color: var(--muted); font-size: 0.85rem; margin: 0; }}
+.stButton > button {{ border-radius: var(--rag-md); font-weight: 600; }}
+button[data-testid="stBaseButton-primary"] {{
+    background: linear-gradient(135deg, {primario}, {secondario});
+    border: none; border-radius: var(--rag-md); color: #fff;
+    box-shadow: 0 8px 20px rgba(30,58,95,.18);
+}}
+button[data-testid="stBaseButton-primary"]:hover {{ box-shadow: 0 12px 26px rgba(30,58,95,.28); }}
+.product-foot {{
+    text-align: center; color: var(--muted); font-size: 0.78rem; letter-spacing: .04em;
+    margin-top: 2.6rem; padding: 0.8rem 1rem; border-radius: var(--rag-pill);
+    background: rgba(255,255,255,.72); border: 1px solid var(--hairline);
+}}
+
+@media (max-width: 768px) {{
+    .block-container {{ padding: 1rem .9rem 2.5rem; }}
+    .header {{ padding: 1.5rem 1rem; border-radius: var(--rag-lg); margin-bottom: 1.2rem; }}
+    .header img {{ width: 66px; height: 66px; margin-bottom: 0.45rem; border-width: 2px; }}
+    .header h1 {{ font-size: 1.55rem; }}
+    .header p {{ font-size: 0.84rem; margin: 0.28rem 0 0; }}
+    .header .header-body {{ padding: 1rem .9rem; max-width: 100%; border-radius: var(--rag-md); }}
+    .steps {{ padding: 0.35rem 0.45rem; margin-bottom: 1.2rem; }}
+    .step {{ padding: 0.15rem 0.3rem; gap: 0.3rem; }}
+    .step .num {{ width: 22px; height: 22px; font-size: 0.66rem; }}
+    .step .txt {{ font-size: 0.68rem; }}
+    .section-title {{ font-size: 1.3rem; }}
+    .card, .booking-item, .service-pick, .recap-box, .staff-pick {{ padding: 1rem 1.05rem; }}
+    .service-pick h3 {{ font-size: 1.2rem; }}
+    .staff-pick img {{ width: 72px; height: 72px; }}
+    .service-pick, .staff-pick {{ min-height: auto; }}
+    .staff-pick {{ padding-top: 1.4rem; }}
+    .metric-card {{ min-height: 112px; padding: 1rem .5rem .9rem; }}
+    .metric-value {{ font-size: 1.5rem; }}
+    .product-foot {{ font-size: 0.7rem; margin-top: 1.8rem; padding: 0.6rem 0.7rem; }}
+    .stButton > button, .st-key-topnav .stButton > button,
+    .stDownloadButton > button, .stFormSubmitButton > button {{ min-height: 46px; }}
+    .stTextInput input, .stTextArea textarea, .stNumberInput input {{ font-size: 16px; }}
+    .st-key-topnav {{ margin-bottom: 0.8rem; }}
+}}
 </style>
 """
     )
@@ -389,22 +576,62 @@ def render_header(subtitle=None):
     telefono = esc(impostazioni.get("telefono") or "")
     email = esc(impostazioni.get("email") or "")
     uri = logo_data_uri(impostazioni.get("logo_path") or "")
+    sfondo = logo_data_uri(impostazioni.get("sfondo_header") or "")
     logo_html = (
         f'<img src="{uri}" alt="Logo" />'
         if uri
         else '<div style="font-size:3rem;margin-bottom:0.4rem;"><i class="fas fa-calendar-check"></i></div>'
     )
-    parts = [f'<div class="header">{logo_html}<h1>{nome}</h1>']
+    parts = [f'<div class="header">']
+    if sfondo:
+        parts.append(
+            f'<div class="header-photo" style="background-image:url(\'{sfondo}\');"></div>'
+            f'<div class="header-veil"></div>'
+        )
+    parti_testo = [logo_html, f"<h1>{nome}</h1>"]
     if indirizzo:
-        parts.append(f'<p><i class="fas fa-map-marker-alt"></i> {indirizzo}</p>')
+        parti_testo.append(f'<p><i class="fas fa-map-marker-alt"></i> {indirizzo}</p>')
     if telefono:
-        parts.append(f'<p><i class="fas fa-phone"></i> {telefono}</p>')
+        parti_testo.append(f'<p><i class="fas fa-phone"></i> {telefono}</p>')
     if email:
-        parts.append(f'<p><i class="fas fa-envelope"></i> {email}</p>')
+        parti_testo.append(f'<p><i class="fas fa-envelope"></i> {email}</p>')
     if subtitle:
-        parts.append(f"<p>{esc(subtitle)}</p>")
+        parti_testo.append(f"<p>{esc(subtitle)}</p>")
+    if sfondo:
+        # Con foto il blocco testo va su una velatura semitrasparente.
+        parti_testo.insert(0, '<div class="header-body">')
+        parti_testo.append("</div>")
+    parts.append("".join(parti_testo))
     parts.append("</div>")
     html_md("".join(parts))
+
+
+def render_steps(passo_attivo):
+    """Barra di progressi a 3 passi: tratto grafico distintivo di questa app."""
+    passi = ["Servizio", "Chi ti segue", "Giorno e ora"]
+    frammenti = []
+    for idx, label in enumerate(passi, start=1):
+        if idx < passo_attivo:
+            stato, segno = "done", '<i class="fas fa-check"></i>'
+        elif idx == passo_attivo:
+            stato, segno = "active", str(idx)
+        else:
+            stato, segno = "", str(idx)
+        frammenti.append(
+            f'<div class="step {stato}"><span class="num">{segno}</span>'
+            f'<span class="txt">{esc(label)}</span></div>'
+        )
+        if idx < len(passi):
+            frammenti.append('<span class="step-sep">&bull;</span>')
+    html_md(f'<div class="steps">{"".join(frammenti)}</div>')
+
+
+def _calcola_passo():
+    if not st.session_state.servizio_selezionato:
+        return 1
+    if get_staff() and not is_operatore() and not st.session_state.staff_selezionato:
+        return 2
+    return 3
 
 
 def is_admin():
@@ -415,46 +642,55 @@ def is_operatore():
     return st.session_state.get("logged_in") and st.session_state.get("ruolo") == "staff"
 
 
-def sidebar_setup():
+def _dettagli_nav():
+    """Riga sotto la nav: ruolo e orari, che prima stavano in sidebar."""
     if is_admin():
-        options = ["🏠 Home", "📅 Prenota", "📋 Gestione", "⚙️ Configura", "🚪 Esci"]
+        nota = "Accesso: titolare"
     elif is_operatore():
-        options = ["👤 I miei appuntamenti", "📅 Prenota", "🚪 Esci"]
+        membro = get_membro(st.session_state.staff_id) if st.session_state.staff_id else None
+        nota = f"Operatore: {membro['nome'] if membro else 'staff'}"
     else:
-        options = ["📅 Prenota", "🔐 Area riservata"]
-    # Cambia pagina solo prima di st.radio(key="menu"), mai dopo.
+        nota = "Prenota come cliente · lo staff conferma l'appuntamento"
+    if is_admin() and not smtp_configurato(impostazioni):
+        nota += " · email non configurata"
+    orari = (
+        f"{impostazioni.get('orario_apertura') or '09:00'}–{impostazioni.get('orario_chiusura') or '19:00'}"
+    )
+    pausa_i = (impostazioni.get("pausa_inizio") or "").strip()
+    pausa_f = (impostazioni.get("pausa_fine") or "").strip()
+    if pausa_i and pausa_f:
+        orari += f" · pausa {pausa_i}–{pausa_f}"
+    st.caption(f"{nota} · Orari {orari}")
+
+
+def topnav_setup():
+    """Nav in alto per tutti i ruoli: su telefono la sidebar nascosta è un vicolo cieco."""
+    if is_admin():
+        options = [MENU_HOME, MENU_PRENOTA, MENU_GESTIONE, MENU_CONFIGURA, MENU_ESCI]
+    elif is_operatore():
+        options = [MENU_APPUNTAMENTI, MENU_PRENOTA, MENU_ESCI]
+    else:
+        options = [MENU_PRENOTA, MENU_AREA]
+    if st.session_state.get("menu") not in options:
+        st.session_state.menu = options[0]
     next_menu = st.session_state.pop("_next_menu", None)
     if next_menu in options:
         st.session_state.menu = next_menu
-    elif st.session_state.get("menu") not in options:
-        st.session_state.menu = options[0]
-    with st.sidebar:
-        uri = logo_data_uri(impostazioni.get("logo_path") or "")
-        logo_bit = f'<img src="{uri}" alt="logo" style="width:64px;height:64px;object-fit:cover;border-radius:12px;margin-bottom:0.6rem;" />' if uri else '<i class="fas fa-scissors" style="font-size:1.6rem;"></i>'
-        html_md(
-            f'<div style="background:linear-gradient(135deg,{primario},{secondario});padding:1.4rem 1.2rem;border-radius:16px;color:white;text-align:center;margin-bottom:1rem;">'
-            f"{logo_bit}"
-            f'<p style="margin:0.35rem 0 0;font-weight:700;font-size:1.05rem;">{esc(impostazioni.get("nome_attivita") or "Prenota")}</p>'
-            f'<p style="margin:0.25rem 0 0;opacity:0.9;font-size:0.8rem;">Prenotazione online</p>'
-            f"</div>"
-        )
-        pagina = st.radio("Menu", options, key="menu", label_visibility="collapsed")
-        if is_admin():
-            st.caption("Accesso: titolare")
-        elif is_operatore():
-            membro = get_membro(st.session_state.staff_id) if st.session_state.staff_id else None
-            st.caption(f"Operatore: {membro['nome'] if membro else 'staff'}")
-        else:
-            st.caption("Prenota come cliente · lo staff conferma l'appuntamento")
-        if is_admin() and not smtp_configurato(impostazioni):
-            st.warning("Email non configurata: le nuove prenotazioni non avvisano il negozio.")
-        html_md(
-            f'<p class="product-foot" style="margin-top:1.5rem;">'
-            f'{esc(impostazioni.get("orario_apertura") or "09:00")}–{esc(impostazioni.get("orario_chiusura") or "19:00")}'
-            f'{(" · pausa " + esc(impostazioni.get("pausa_inizio")) + "–" + esc(impostazioni.get("pausa_fine"))) if (impostazioni.get("pausa_inizio") or "").strip() else ""}'
-            f"</p>"
-        )
-    return pagina
+    with st.container(key="topnav"):
+        cols = st.columns(len(options), gap="small")
+        for col, label in zip(cols, options):
+            with col:
+                attiva = st.session_state.menu == label
+                if st.button(
+                    label,
+                    key=f"topnav::{label}",
+                    width='stretch',
+                    type="primary" if attiva else "secondary",
+                ):
+                    st.session_state.menu = label
+                    st.rerun()
+    _dettagli_nav()
+    return st.session_state.menu
 
 
 def _login_ok(username, password):
@@ -482,7 +718,7 @@ def pagina_login():
     with st.form("login_form"):
         username = st.text_input("Utente")
         password = st.text_input("Password", type="password")
-        submitted = st.form_submit_button("Entra", use_container_width=True, type="primary")
+        submitted = st.form_submit_button("Entra", width='stretch', type="primary")
     if submitted:
         esito = _login_ok(username, password)
         if esito and esito.get("errore"):
@@ -491,14 +727,14 @@ def pagina_login():
             st.session_state.logged_in = True
             st.session_state.ruolo = "admin"
             st.session_state.staff_id = None
-            st.session_state._next_menu = "🏠 Home"
+            st.session_state._next_menu = MENU_HOME
             st.toast("Accesso titolare")
             st.rerun()
         elif esito and esito.get("ruolo") == "staff":
             st.session_state.logged_in = True
             st.session_state.ruolo = "staff"
             st.session_state.staff_id = esito["staff"]["id"]
-            st.session_state._next_menu = "👤 I miei appuntamenti"
+            st.session_state._next_menu = MENU_APPUNTAMENTI
             st.toast(f"Ciao {esito['staff']['nome']}")
             st.rerun()
         else:
@@ -596,6 +832,7 @@ def pagina_prenota():
         _pagina_conferma_cliente()
         return
 
+    render_steps(_calcola_passo())
     st.markdown(
         '<h2 class="section-title"><i class="fas fa-clipboard-list"></i> Cosa vuoi prenotare</h2>',
         unsafe_allow_html=True,
@@ -626,7 +863,7 @@ def pagina_prenota():
                     f"</div>"
                 )
                 label = "Selezionato" if selected_id == s["id"] else "Prenota questo"
-                if st.button(label, key=f"pick_{s['id']}", use_container_width=True, type="primary" if selected_id == s["id"] else "secondary"):
+                if st.button(label, key=f"pick_{s['id']}", width='stretch', type="primary" if selected_id == s["id"] else "secondary"):
                     st.session_state.servizio_selezionato = s["id"]
                     st.rerun()
 
@@ -675,7 +912,7 @@ def pagina_prenota():
                         f"<p>{esc(membro.get('ruolo') or 'Staff')}</p></div>"
                     )
                     label = "Selezionato" if selected_staff == membro["id"] else "Scegli"
-                    if st.button(label, key=f"staff_{membro['id']}", use_container_width=True, type="primary" if selected_staff == membro["id"] else "secondary"):
+                    if st.button(label, key=f"staff_{membro['id']}", width='stretch', type="primary" if selected_staff == membro["id"] else "secondary"):
                         st.session_state.staff_selezionato = membro["id"]
                         st.rerun()
         if not st.session_state.staff_selezionato:
@@ -736,7 +973,7 @@ def pagina_prenota():
             f"{data_sel.strftime('%d/%m/%Y')} alle {esc(ora_sel)}"
             f"{('<br>Con ' + esc(membro['nome'])) if membro else ''}</div>"
         )
-        submitted = st.form_submit_button("Invia prenotazione", use_container_width=True, type="primary")
+        submitted = st.form_submit_button("Invia prenotazione", width='stretch', type="primary")
 
     if not submitted:
         return
@@ -803,7 +1040,7 @@ def _pagina_conferma_cliente():
             st.success(f"Ti abbiamo inviato una copia a {p.get('email')}.")
         else:
             st.caption("Non è partita l'email di copia al cliente (SMTP non configurato o indirizzo non valido).")
-    if st.button("Nuova prenotazione", use_container_width=True):
+    if st.button("Nuova prenotazione", width='stretch'):
         _reset_prenotazione()
         st.rerun()
 
@@ -845,28 +1082,28 @@ def pagina_gestione(solo_staff_id=None):
             col_a, col_b, col_c, col_d = st.columns(4)
             with col_a:
                 if stato == "in_attesa":
-                    if st.button("Conferma", key=f"conf_{p['id']}", use_container_width=True):
+                    if st.button("Conferma", key=f"conf_{p['id']}", width='stretch'):
                         update_stato_prenotazione(p["id"], "confermato")
                         st.toast("Prenotazione confermata")
                         st.rerun()
             with col_b:
                 if stato in ("in_attesa", "confermato"):
-                    if st.button("Segna pagato", key=f"pay_{p['id']}", use_container_width=True, type="primary"):
+                    if st.button("Segna pagato", key=f"pay_{p['id']}", width='stretch', type="primary"):
                         update_stato_prenotazione(p["id"], "pagato")
                         st.toast("Incasso registrato")
                         st.rerun()
             with col_c:
                 if stato == "pagato":
-                    if st.button("Non pagato", key=f"unpay_{p['id']}", use_container_width=True):
+                    if st.button("Non pagato", key=f"unpay_{p['id']}", width='stretch'):
                         update_stato_prenotazione(p["id"], "confermato")
                         st.rerun()
                 elif stato == "confermato":
-                    if st.button("In attesa", key=f"att_{p['id']}", use_container_width=True):
+                    if st.button("In attesa", key=f"att_{p['id']}", width='stretch'):
                         update_stato_prenotazione(p["id"], "in_attesa")
                         st.rerun()
             with col_d:
                 if stato != "annullata":
-                    if st.button("Annulla", key=f"ann_{p['id']}", use_container_width=True, type="secondary"):
+                    if st.button("Annulla", key=f"ann_{p['id']}", width='stretch', type="secondary"):
                         update_stato_prenotazione(p["id"], "annullata")
                         st.rerun()
             staff_all = get_staff(includi_inattivi=True)
@@ -926,7 +1163,7 @@ def pagina_gestione(solo_staff_id=None):
                 ]
                 if c in df.columns
             ]
-            st.dataframe(df[colonne], use_container_width=True, hide_index=True)
+            st.dataframe(df[colonne], width='stretch', hide_index=True)
         else:
             st.info("Ancora nessuna prenotazione.")
     with tab3:
@@ -936,19 +1173,25 @@ def pagina_gestione(solo_staff_id=None):
             st.info("Nessuna prenotazione annullata da eliminare.")
         for p in all_pre:
             _booking_card(p)
-            if st.button("Elimina definitivamente", key=f"elim_{p['id']}", use_container_width=True, type="secondary"):
+            if st.button("Elimina definitivamente", key=f"elim_{p['id']}", width='stretch', type="secondary"):
                 cancella_prenotazione(p["id"])
                 st.toast("Prenotazione eliminata")
                 st.rerun()
 
 
-def _salva_logo(file):
+def _salva_logo(file, prefisso=""):
     os.makedirs(UPLOAD_DIR, exist_ok=True)
-    filename = os.path.basename(file.name)
-    path = os.path.join(UPLOAD_DIR, filename)
+    nome, est = os.path.splitext(os.path.basename(file.name))
+    est = est.lower()
+    path = os.path.join(UPLOAD_DIR, f"{prefisso}{nome}{est}")
+    i = 1
+    # Senza questo, un file con lo stesso nome sovrascriverebbe logo o foto staff.
+    while os.path.exists(path):
+        path = os.path.join(UPLOAD_DIR, f"{prefisso}{nome}_{i}{est}")
+        i += 1
     with open(path, "wb") as handle:
         handle.write(file.getbuffer())
-    return "uploads/" + filename
+    return "uploads/" + os.path.basename(path)
 
 
 def pagina_configura():
@@ -968,21 +1211,35 @@ def pagina_configura():
                 value=imp.get("email") or "",
             )
             logo = st.file_uploader("Logo", type=["png", "jpg", "jpeg", "webp"])
+            sfondo = st.file_uploader(
+                "Foto di sfondo del blocco in alto",
+                type=["png", "jpg", "jpeg", "webp"],
+                help="Viene stretchata su tutto il banner. Il nome e i contatti restano leggibili sopra una velatura semitrasparente.",
+            )
+            if (imp.get("sfondo_header") or "") and not sfondo:
+                st.caption(f"Sfondo attuale: {imp['sfondo_header']} — carica un'altra foto per sostituirlo.")
+            togli_sfondo = st.checkbox("Togli foto di sfondo", value=False)
             c1, c2 = st.columns(2)
             with c1:
                 prim = st.color_picker("Colore primario", value=imp.get("colore_primario") or "#1E3A5F")
             with c2:
                 sec = st.color_picker("Colore secondario", value=imp.get("colore_secondario") or "#E94560")
-            if st.form_submit_button("Salva branding", type="primary", use_container_width=True):
+            if st.form_submit_button("Salva branding", type="primary", width='stretch'):
                 logo_path = imp.get("logo_path") or ""
                 if logo:
                     logo_path = _salva_logo(logo)
+                sfondo_path = imp.get("sfondo_header") or ""
+                if sfondo:
+                    sfondo_path = _salva_logo(sfondo, "sfondo_")
+                elif togli_sfondo:
+                    sfondo_path = ""
                 update_impostazioni(
                     nome_attivita=nome,
                     indirizzo=indirizzo,
                     telefono=telefono,
                     email=email,
                     logo_path=logo_path,
+                    sfondo_header=sfondo_path,
                     colore_primario=prim,
                     colore_secondario=sec,
                 )
@@ -1008,7 +1265,7 @@ def pagina_configura():
             nuovo_prezzo = n2.number_input("Prezzo nuovo €", value=0.0, step=0.5, min_value=0.0)
             nuova_dur = n3.number_input("Durata nuova min", value=60, step=5, min_value=5)
             nuova_desc = st.text_input("Descrizione nuovo servizio")
-            if st.form_submit_button("Salva servizi", type="primary", use_container_width=True):
+            if st.form_submit_button("Salva servizi", type="primary", width='stretch'):
                 for s in servizi:
                     update_servizio(
                         s["id"],
@@ -1159,7 +1416,7 @@ def pagina_configura():
                 value=imp.get("pausa_fine") or "",
                 placeholder="14:00",
             )
-            if st.form_submit_button("Salva orari", type="primary", use_container_width=True):
+            if st.form_submit_button("Salva orari", type="primary", width='stretch'):
                 inizio = (pausa_inizio or "").strip()
                 fine = (pausa_fine or "").strip()
                 if (inizio and not fine) or (fine and not inizio):
@@ -1195,7 +1452,7 @@ def pagina_configura():
                 "Invia anche una copia al cliente",
                 value=bool(int(imp.get("invia_email_cliente") or 0)),
             )
-            if st.form_submit_button("Salva email", type="primary", use_container_width=True):
+            if st.form_submit_button("Salva email", type="primary", width='stretch'):
                 payload = {
                     "smtp_host": smtp_host,
                     "smtp_port": int(smtp_port),
@@ -1226,7 +1483,7 @@ def pagina_configura():
             admin_user = st.text_input("Utente admin", value=imp.get("admin_username") or DEFAULT_ADMIN_USERNAME)
             nuova_pwd = st.text_input("Nuova password", type="password")
             conferma_pwd = st.text_input("Conferma password", type="password")
-            if st.form_submit_button("Salva accesso", type="primary", use_container_width=True):
+            if st.form_submit_button("Salva accesso", type="primary", width='stretch'):
                 fields = {"admin_username": admin_user.strip() or DEFAULT_ADMIN_USERNAME}
                 if nuova_pwd or conferma_pwd:
                     if nuova_pwd != conferma_pwd:
@@ -1248,14 +1505,14 @@ def main():
     secondario = impostazioni.get("colore_secondario") or "#E94560"
     inject_css()
     _sync_auth_cookie()
-    pagina = sidebar_setup()
-    if pagina == "🚪 Esci":
+    pagina = topnav_setup()
+    if pagina == MENU_ESCI:
         st.session_state._pending_logout = True
         st.rerun()
-    if pagina == "🔐 Area riservata":
+    if pagina == MENU_AREA:
         pagina_login()
         return
-    if pagina in ("🏠 Home", "📋 Gestione", "⚙️ Configura") and not is_admin():
+    if pagina in (MENU_HOME, MENU_GESTIONE, MENU_CONFIGURA) and not is_admin():
         if is_operatore():
             pagina_gestione(solo_staff_id=st.session_state.staff_id)
             html_md(
@@ -1265,19 +1522,22 @@ def main():
             return
         pagina_login()
         return
-    if pagina == "🏠 Home":
+    if pagina == MENU_HOME:
         pagina_home()
-    elif pagina == "👤 I miei appuntamenti":
+    elif pagina == MENU_APPUNTAMENTI:
         if not is_operatore():
             pagina_login()
             return
         pagina_gestione(solo_staff_id=st.session_state.staff_id)
-    elif pagina == "📅 Prenota":
+    elif pagina == MENU_PRENOTA:
         pagina_prenota()
-    elif pagina == "📋 Gestione":
+    elif pagina == MENU_GESTIONE:
         pagina_gestione()
-    elif pagina == "⚙️ Configura":
+    elif pagina == MENU_CONFIGURA:
         pagina_configura()
+    else:
+        st.error(f"Rotta di menu sconosciuta: {pagina!r}")
+        st.stop()
     html_md(
         f'<p class="product-foot">© {datetime.now().year} {esc(impostazioni.get("nome_attivita") or "")}'
         f" · prenotazione diretta, senza commissioni</p>"
