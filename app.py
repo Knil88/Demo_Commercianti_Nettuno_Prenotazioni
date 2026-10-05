@@ -4,6 +4,7 @@ import hmac
 import html
 import os
 import secrets
+import sys
 import textwrap
 import time
 from datetime import date, datetime, timedelta
@@ -311,10 +312,37 @@ def logo_data_uri(path):
     return f"data:{mime};base64,{payload}"
 
 
-def inject_css():
-    # Niente commenti CSS dentro <style>: il pipeline markdown di Streamlit tratta
-    # il carattere '*' come emphasis e finisce per iniettare un </style> a metà,
-    # riversando il resto del CSS come testo visibile.
+def _css_html(markup):
+    """Inietta il CSS togliendo le righe vuote e vigilando sugli asterischi.
+
+    Il CSS passa dal pipeline markdown di Streamlit, che ha due manie:
+    - una riga vuota chiude il blocco HTML, e il CSS dopo verrebbe stampato
+      come testo visibile sopra la pagina;
+    - due asterischi vengono letti come apertura/chiusura di emphasis, e il
+      '*/' risultante inietta un </style> a meta' spaccando il foglio di stile.
+      Per questo nel CSS c'e' un solo '*', il reset box-sizing: aggiungerne un
+      secondo (per esempio '*::before' o un selettore '.pad *') rompe tutto.
+    """
+    testo = str(markup)
+    if testo.count("*") > 1:
+        print(
+            f"ATTENZIONE: {testo.count('*')} asterischi nel CSS. "
+            "Tieni il CSS a un solo '*' (reset box-sizing), altrimenti si spacca.",
+            file=sys.stderr,
+        )
+    html_md("\n".join(riga for riga in testo.splitlines() if riga.strip()))
+
+
+def inject_css(cambio_sezione=True):
+    # Il blocco <style> va re-iniettato a ogni rerun: Streamlit rimuove dalla
+    # DOM gli elementi che il run precedente non ri-emette, quindi skippare
+    # l'iniezione dopo il primo render cancella lo stile (logo e header gianti).
+    # Non provare a "ottimizzarlo" con una firma in session_state: non funziona.
+
+    # Dentro <style> niente commenti CSS: il pipeline markdown di Streamlit
+    # tratta '*' come emphasis e inietta un </style> a meta', riversando il
+    # CSS come testo. Va iniettato con st.markdown, non st.html: DOMPurify
+    # svuota lo <style>.
     css_toolbar = (
         '[data-testid="stToolbar"], [data-testid="stHeaderActionElements"], '
         '[data-testid="stStatusWidget"] { display: none !important; }\n'
@@ -323,11 +351,16 @@ def inject_css():
         if NASCONDI_TOOLBAR
         else ""
     )
-    # Due note sul blocco <style> che segue:
-    # 1) niente commenti CSS: il pipeline markdown di Streamlit tratta '*' come
-    #    emphasis e inietta un </style> a metà, riversando il CSS come testo;
-    # 2) va iniettato con st.markdown, non st.html: DOMPurify svuota lo <style>.
-    html_md(
+    # Stessa sezione, rerun interno (scegliere un servizio, cambiare un filtro):
+    # niente animazioni, altrimenti ripartono da capo a ogni interazione.
+    # Elenco esplicito, niente '*': vedi la regola sugli asterischi in _css_html.
+    css_fermo = (
+        ""
+        if cambio_sezione
+        else ".header, .metric-card, .booking-item, .section-title::after "
+        "{ animation: none !important; transition: none !important; }"
+    )
+    _css_html(
         f"""
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 <style>
@@ -382,11 +415,12 @@ section[data-testid="stSidebar"] {{
 @keyframes fadeInDown {{ from {{ opacity: 0; transform: translateY(-20px); }} to {{ opacity: 1; transform: translateY(0); }} }}
 @keyframes slideInLeft {{ from {{ opacity: 0; transform: translateX(-16px); }} to {{ opacity: 1; transform: translateX(0); }} }}
 @keyframes expandLine {{ to {{ width: 100%; }} }}
+{css_fermo}
 .header {{
     background: linear-gradient(135deg, {primario}, {secondario});
     padding: 2.2rem 1.6rem; border-radius: var(--rag-xl); color: #fff; text-align: center;
     margin-bottom: 1.6rem; box-shadow: var(--ombra-lg);
-    animation: fadeInDown 0.6s ease-out;
+    animation: fadeInDown 0.3s ease-out;
     position: relative; overflow: hidden;
 }}
 .header::after {{
@@ -445,7 +479,7 @@ section[data-testid="stSidebar"] {{
     background: #fff; padding: 1.2rem 0.7rem 1.1rem;
     border-radius: var(--rag-lg); box-shadow: var(--ombra-sm);
     text-align: center; border-top: 4px solid {primario};
-    animation: fadeInUp 0.5s ease-out both;
+    animation: fadeInUp 0.25s ease-out both;
     min-height: 152px; height: 100%;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
 }}
@@ -462,7 +496,7 @@ section[data-testid="stSidebar"] {{
     padding: 1.3rem 1.5rem; margin-bottom: 0.7rem; box-shadow: var(--ombra-sm);
     transition: box-shadow .25s ease, transform .25s ease;
 }}
-.booking-item {{ border-left: 4px solid {secondario}; animation: slideInLeft 0.35s ease-out both; }}
+.booking-item {{ border-left: 4px solid {secondario}; animation: slideInLeft 0.25s ease-out both; }}
 .booking-item.confermato, .booking-item.confermata {{ border-left-color: #27ae60; }}
 .booking-item.pagato {{ border-left-color: #1a7f9e; }}
 .booking-item.in_attesa {{ border-left-color: #f39c12; }}
@@ -483,7 +517,7 @@ section[data-testid="stSidebar"] {{
 }}
 .section-title::after {{
     content: ''; position: absolute; bottom: -3px; left: 0; width: 0; height: 3px;
-    background: {secondario}; animation: expandLine 0.8s ease-out 0.2s forwards;
+    background: {secondario}; animation: expandLine 0.4s ease-out 0.1s forwards;
 }}
 .empty-state {{ text-align: center; padding: 3rem; color: var(--muted); }}
 .empty-state i {{ font-size: 3rem; margin-bottom: 1rem; display: block; color: {primario}; }}
@@ -539,7 +573,6 @@ button[data-testid="stBaseButton-primary"]:hover {{ box-shadow: 0 12px 26px rgba
     margin-top: 2.6rem; padding: 0.8rem 1rem; border-radius: var(--rag-pill);
     background: rgba(255,255,255,.72); border: 1px solid var(--hairline);
 }}
-
 @media (max-width: 768px) {{
     .block-container {{ padding: 1rem .9rem 2.5rem; }}
     .header {{ padding: 1.5rem 1rem; border-radius: var(--rag-lg); margin-bottom: 1.2rem; }}
@@ -563,8 +596,7 @@ button[data-testid="stBaseButton-primary"]:hover {{ box-shadow: 0 12px 26px rgba
     .stButton > button, .st-key-topnav .stButton > button,
     .stDownloadButton > button, .stFormSubmitButton > button {{ min-height: 46px; }}
     .stTextInput input, .stTextArea textarea, .stNumberInput input {{ font-size: 16px; }}
-    .st-key-topnav {{ margin-bottom: 0.8rem; }}
-}}
+.st-key-topnav {{ margin-bottom: 0.8rem; }}
 </style>
 """
     )
@@ -604,6 +636,31 @@ def render_header(subtitle=None):
     parts.append("".join(parti_testo))
     parts.append("</div>")
     html_md("".join(parts))
+
+
+def _scrolla(ancora):
+    """Porta in vista un blocco appena comparso.
+
+    Non scrolliamo a inizio pagina sui rerun interni (farebbe perdere il posto
+    nella lista dei servizi): scrolliamo invece al blocco che e' appena comparso,
+    cosi' l'utente non deve cercarlo a mano.
+    Attenzione: st.html esegue solo il JavaScript racchiuso in <script>, se no
+    lo stampa come testo.
+    """
+    if not ancora:
+        return
+    st.html(
+        f"<script>document.getElementById({ancora!r})"
+        "?.scrollIntoView({behavior: 'smooth', block: 'start'});</script>",
+        unsafe_allow_javascript=True,
+    )
+
+
+def _scrolla_in_cima():
+    st.html(
+        "<script>window.scrollTo({top: 0, behavior: 'smooth'});</script>",
+        unsafe_allow_javascript=True,
+    )
 
 
 def render_steps(passo_attivo):
@@ -663,28 +720,36 @@ def _dettagli_nav():
     st.caption(f"{nota} · Orari {orari}")
 
 
-def topnav_setup():
-    """Nav in alto per tutti i ruoli: su telefono la sidebar nascosta è un vicolo cieco."""
+def _opzioni_menu():
     if is_admin():
-        options = [MENU_HOME, MENU_PRENOTA, MENU_GESTIONE, MENU_CONFIGURA, MENU_ESCI]
-    elif is_operatore():
-        options = [MENU_APPUNTAMENTI, MENU_PRENOTA, MENU_ESCI]
-    else:
-        options = [MENU_PRENOTA, MENU_AREA]
-    if st.session_state.get("menu") not in options:
-        st.session_state.menu = options[0]
-    next_menu = st.session_state.pop("_next_menu", None)
-    if next_menu in options:
-        st.session_state.menu = next_menu
+        return [MENU_HOME, MENU_PRENOTA, MENU_GESTIONE, MENU_CONFIGURA, MENU_ESCI]
+    if is_operatore():
+        return [MENU_APPUNTAMENTI, MENU_PRENOTA, MENU_ESCI]
+    return [MENU_PRENOTA, MENU_AREA]
+
+
+def _prepara_menu():
+    """Normalizza la sezione senza renderizzare: serve per iniettare il CSS per primo."""
+    opzioni = _opzioni_menu()
+    prossimo = st.session_state.pop("_next_menu", None)
+    if prossimo in opzioni:
+        st.session_state.menu = prossimo
+    elif st.session_state.get("menu") not in opzioni:
+        st.session_state.menu = opzioni[0]
+    return opzioni
+
+
+def topnav_setup(opzioni):
+    """Nav in alto per tutti i ruoli: su telefono la sidebar nascosta è un vicolo cieco."""
     with st.container(key="topnav"):
-        cols = st.columns(len(options), gap="small")
-        for col, label in zip(cols, options):
+        cols = st.columns(len(opzioni), gap="small")
+        for col, label in zip(cols, opzioni):
             with col:
                 attiva = st.session_state.menu == label
                 if st.button(
                     label,
                     key=f"topnav::{label}",
-                    width='stretch',
+                    width="stretch",
                     type="primary" if attiva else "secondary",
                 ):
                     st.session_state.menu = label
@@ -877,8 +942,11 @@ def pagina_prenota():
         st.warning("Questo servizio non è più disponibile. Scegline un altro.")
         return
 
+    servizio_appena_scelto = st.session_state.servizio_selezionato != st.session_state.get("_servizio_visto")
+    st.session_state._servizio_visto = st.session_state.servizio_selezionato
+
     html_md(
-        f'<div class="recap-box">'
+        f'<div class="recap-box" id="scelta-servizio">'
         f'<h3 style="margin-top:0;color:{primario};">Hai scelto: {esc(servizio["nome"])}</h3>'
         f"<p>{esc(servizio.get('descrizione') or 'Servizio in negozio.')}</p>"
         f"<p><strong>Durata:</strong> {int(servizio['durata_minuti'])} minuti · "
@@ -886,6 +954,7 @@ def pagina_prenota():
         f'<p style="color:#666;margin-bottom:0;">L\'orario resta bloccato per tutta la durata, per la persona che scegli.</p>'
         f"</div>"
     )
+    _scrolla("scelta-servizio" if servizio_appena_scelto else None)
 
     if is_operatore() and st.session_state.staff_id:
         st.session_state.staff_selezionato = st.session_state.staff_id
@@ -920,6 +989,11 @@ def pagina_prenota():
             return
     elif not staff_list:
         st.session_state.staff_selezionato = None
+
+    staff_appena_scelto = st.session_state.staff_selezionato != st.session_state.get("_staff_visto")
+    st.session_state._staff_visto = st.session_state.staff_selezionato
+    html_md('<div id="scelta-data"></div>')
+    _scrolla("scelta-data" if staff_appena_scelto else None)
 
     col_data, col_ora = st.columns(2)
     with col_data:
@@ -956,14 +1030,20 @@ def pagina_prenota():
             st.warning("In questa data non ci sono orari liberi per questo servizio. Prova un altro giorno.")
         return
 
-    st.markdown('<h3 class="section-title"><i class="fas fa-user"></i> I tuoi dati</h3>', unsafe_allow_html=True)
+    st.markdown(
+        '<h3 class="section-title"><i class="fas fa-user"></i> I tuoi dati</h3>',
+        unsafe_allow_html=True,
+    )
     with st.form("prenotazione_form"):
+        # L'ordine dentro le colonne segue quello di lettura su mobile, dove
+        # Streamlit le impila: Nominome -> Cognome -> Telefono -> Email.
+        # Su desktop le due colonne si leggono comunque per righe.
         c1, c2 = st.columns(2)
         with c1:
             nome = st.text_input("Nome *")
-            telefono = st.text_input("Telefono *", placeholder="333 123 4567")
-        with c2:
             cognome = st.text_input("Cognome")
+        with c2:
+            telefono = st.text_input("Telefono *", placeholder="333 123 4567")
             email = st.text_input("Email (per la conferma)", placeholder="mario@email.it")
         note = st.text_area("Note per il negozio (opzionale)", placeholder="Allergie, preferenze, richiesta particolare...")
         membro = get_membro(st.session_state.staff_selezionato) if st.session_state.staff_selezionato else None
@@ -1503,9 +1583,19 @@ def main():
     impostazioni = load_impostazioni()
     primario = impostazioni.get("colore_primario") or "#1E3A5F"
     secondario = impostazioni.get("colore_secondario") or "#E94560"
-    inject_css()
     _sync_auth_cookie()
-    pagina = topnav_setup()
+
+    opzioni = _prepara_menu()
+    pagina = st.session_state.menu
+    # Vero solo cambiando sezione: i rerun interni della stessa pagina
+    # (scegliere un servizio, cambiare un filtro) non devono animare nulla.
+    cambio_sezione = st.session_state.get("_sezione") != pagina
+    st.session_state._sezione = pagina
+
+    inject_css(cambio_sezione)
+    if cambio_sezione:
+        _scrolla_in_cima()
+    topnav_setup(opzioni)
     if pagina == MENU_ESCI:
         st.session_state._pending_logout = True
         st.rerun()
