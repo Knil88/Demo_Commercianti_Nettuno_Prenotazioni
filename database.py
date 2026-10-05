@@ -25,6 +25,7 @@ IMPOSTAZIONI_COLUMNS = {
     "invia_email_cliente": "INTEGER DEFAULT 1",
     "admin_username": "TEXT DEFAULT 'admin'",
     "admin_password_hash": "TEXT DEFAULT ''",
+    "sfondo_header": "TEXT DEFAULT ''",
 }
 
 ALLOWED_IMPOSTAZIONI = {
@@ -47,6 +48,7 @@ ALLOWED_IMPOSTAZIONI = {
     "invia_email_cliente",
     "admin_username",
     "admin_password_hash",
+    "sfondo_header",
 }
 
 
@@ -304,6 +306,7 @@ def get_impostazioni():
             "pausa_fine": "",
             "slot_minuti": 15,
             "admin_username": DEFAULT_ADMIN_USERNAME,
+            "sfondo_header": "",
         }
     data = dict(row)
     data.setdefault("orario_apertura", "09:00")
@@ -314,6 +317,7 @@ def get_impostazioni():
     data.setdefault("smtp_host", "smtp.gmail.com")
     data.setdefault("smtp_port", 587)
     data.setdefault("invia_email_cliente", 1)
+    data.setdefault("sfondo_header", "")
     return data
 
 
