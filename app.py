@@ -104,12 +104,10 @@ AUTH_DAYS = 14
 MENU_HOME = "🏠 Home"
 MENU_PRENOTA = "📅 Prenota"
 MENU_GESTIONE = "📋 Gestione"
-MENU_CONFIGURA = "⚙️ Configura"
+MENU_CONFIGURA = "⚙ Configura"
 MENU_ESCI = "🚪 Esci"
 MENU_AREA = "🔐 Area riservata"
 MENU_APPUNTAMENTI = "👤 I miei appuntamenti"
-
-
 def _cookie_header():
     try:
         return st.context.headers.get("Cookie") or ""
@@ -440,21 +438,25 @@ section[data-testid="stSidebar"] {{
     margin: 0.45rem 0 0; opacity: .94; font-size: 0.97rem; color: #fff;
     position: relative; z-index: 1;
 }}
+.header.has-foto {{ padding: 0; }}
+.header.has-foto::after {{ display: none; }}
 .header .header-photo {{
     position: absolute; inset: 0; z-index: 0;
     background-size: cover; background-position: center;
 }}
 .header .header-veil {{
     position: absolute; inset: 0; z-index: 0;
-    background: linear-gradient(180deg, rgba(0,0,0,.38), rgba(0,0,0,.62));
+    background: linear-gradient(180deg, rgba(0,0,0,.12), rgba(0,0,0,.26));
 }}
-.header .header-body {{
-    position: relative; z-index: 1;
-    background: rgba(20,24,34,.42);
-    border: 1px solid rgba(255,255,255,.28);
-    border-radius: calc(var(--rag-lg) - 4px);
-    padding: 1.4rem 1.6rem; margin: 0 auto; max-width: 620px;
-    backdrop-filter: blur(3px);
+.header .fascia {{
+    position: relative; z-index: 1; width: 100%; margin: 3.4rem 0;
+    background: rgba(18,22,32,.58);
+    border-top: 1px solid rgba(255,255,255,.22);
+    border-bottom: 1px solid rgba(255,255,255,.22);
+    padding: 1.05rem 1.2rem;
+}}
+.header .fascia-dentro {{
+    position: relative; z-index: 1; max-width: 660px; margin: 0 auto; text-align: center;
 }}
 .steps {{
     display: flex; align-items: center; justify-content: center; flex-wrap: wrap;
@@ -579,7 +581,8 @@ button[data-testid="stBaseButton-primary"]:hover {{ box-shadow: 0 12px 26px rgba
     .header img {{ width: 66px; height: 66px; margin-bottom: 0.45rem; border-width: 2px; }}
     .header h1 {{ font-size: 1.55rem; }}
     .header p {{ font-size: 0.84rem; margin: 0.28rem 0 0; }}
-    .header .header-body {{ padding: 1rem .9rem; max-width: 100%; border-radius: var(--rag-md); }}
+    .header .fascia {{ margin: 2rem 0; padding: .75rem .85rem; }}
+    .header .fascia-dentro {{ max-width: 100%; }}
     .steps {{ padding: 0.35rem 0.45rem; margin-bottom: 1.2rem; }}
     .step {{ padding: 0.15rem 0.3rem; gap: 0.3rem; }}
     .step .num {{ width: 22px; height: 22px; font-size: 0.66rem; }}
@@ -614,7 +617,7 @@ def render_header(subtitle=None):
         if uri
         else '<div style="font-size:3rem;margin-bottom:0.4rem;"><i class="fas fa-calendar-check"></i></div>'
     )
-    parts = [f'<div class="header">']
+    parts = [f'<div class="header{" has-foto" if sfondo else ""}">']
     if sfondo:
         parts.append(
             f'<div class="header-photo" style="background-image:url(\'{sfondo}\');"></div>'
@@ -630,9 +633,10 @@ def render_header(subtitle=None):
     if subtitle:
         parti_testo.append(f"<p>{esc(subtitle)}</p>")
     if sfondo:
-        # Con foto il blocco testo va su una velatura semitrasparente.
-        parti_testo.insert(0, '<div class="header-body">')
-        parti_testo.append("</div>")
+        # Con foto il testo va su una fascia orizzontale semitrasparente:
+        # si vede la foto sopra e sotto, ma il nome resta leggibile.
+        parti_testo.insert(0, '<div class="fascia"><div class="fascia-dentro">')
+        parti_testo.append("</div></div>")
     parts.append("".join(parti_testo))
     parts.append("</div>")
     html_md("".join(parts))
